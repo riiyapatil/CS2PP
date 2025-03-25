@@ -17,23 +17,31 @@ class Tournament:
     """
     
     def __init__(self, config_file):
-        """Initialize tournament from config.json"""
-        with open(config_file) as f:
-            config = json.load(f)
-    
+        """Initialize tournament from config (dict or JSON file path)."""
+        # Load config (accepts either dict or file path)
+        if isinstance(config_file, dict):
+            config = config_file  # Use dict directly
+        else:
+            with open(config_file) as f:  # Assume it's a file path
+                config = json.load(f)
+
+        # Assign required values
         self.car_data_path = config['car_data_path']
         self.name = config['tournament_name']
-        self.nteams = config.get('nteams', 16)
-    
-        # Validation (3 marks)
+        self.nteams = config.get('nteams', 16)  # Default: 16 teams
+
+        # Validation (unchanged)
         if not isinstance(self.nteams, int):
             raise TypeError("Number of teams must be integer")
         assert self.nteams > 0, "Team count must be positive"
         assert (self.nteams & (self.nteams-1)) == 0, "Team count must be power of 2"
-    
+
+        # Assign optional values with defaults
         self.default_low = config.get('default_low', 20000)
         self.default_high = config.get('default_high', 50000)
         self.default_incr = config.get('default_incr', 5000)
+
+        # Initialize empty state
         self.teams = []
         self.champion = None
     
@@ -112,41 +120,35 @@ class Tournament:
             self._purchase_inventory(team)
 
     def _purchase_inventory(self, team):
-        """Purchase inventory for a single team based on their sponsor"""
         try:
             with open(self.car_data_path, 'r') as file:
                 reader = csv.reader(file)
-                next(reader)  # Skip header row
+                next(reader)  # Skip header
                 available_cars = []
                 for row in reader:
-                    make = row[0]  # First column is Make
-                    model = row[1]  # Second column is Model
-                    mpg = float(row[8])  # MPG-H is 9th column (index 8)
-                    price = float(row[11])  # Price is 12th column (index 11)
-                
-                    if make == team.sponsor:
-                        available_cars.append({
-                            'make': make,
-                            'model': model,
-                            'mpg': mpg,
-                            'price': price
-                        })
-                    
-            # Sort by MPG descending
-            available_cars.sort(key=lambda x: x['mpg'], reverse=True)
-        
-            # Purchase top 5 cars within budget
-            total_spent = 0
-            purchased_cars = []
-        
-            for car in available_cars:
-                if total_spent + car['price'] <= team.budget and len(purchased_cars) < 5:
-                    purchased_cars.append(car)
-                    total_spent += car['price']
-                
-            team.cars = purchased_cars
-            team.budget -= total_spent
-        
+                    if row[0] == team.sponsor:
+                        car = {
+                            'make': row[0],
+                            'model': row[1],
+                            'mpg': float(row[8]),
+                            'price': float(row[11])
+                        }
+                        if car['price'] <= team.budget:  # Only consider affordable cars
+                            available_cars.append(car)
+            
+                # Sort by MPG descending and select top affordable cars
+                available_cars.sort(key=lambda x: x['mpg'], reverse=True)
+                purchased_cars = []
+                total_spent = 0
+            
+                for car in available_cars:
+                    if total_spent + car['price'] <= team.budget:
+                        purchased_cars.append(car)
+                        total_spent += car['price']
+            
+                team.inventory = purchased_cars
+                team.budget -= total_spent
+            
         except FileNotFoundError:
             raise FileNotFoundError(f"Car data file {self.car_data_path} not found")
 
@@ -263,3 +265,59 @@ class Tournament:
             return (f"Team(sponsor='{self.sponsor}', "
                     f"budget={self.budget}, "
                     f"active={self.active})")
+
+class Tournament_optimised(Tournament):
+    """Optimized tournament using 0/1 knapsack DP for car purchases"""
+    
+    def _purchase_inventory(self, team):
+        """Purchase optimal cars using 0/1 knapsack dynamic programming"""
+        try:
+            with open(self.car_data_path, 'r') as file:
+                reader = csv.reader(file)
+                next(reader)  # Skip header
+                cars = []
+                for row in reader:
+                    if row[0] == team.sponsor:
+                        cars.append({
+                            'make': row[0],
+                            'model': row[1],
+                            'mpg': float(row[8]),
+                            'price': float(row[11])
+                        })
+                
+                if not cars:
+                    team.inventory = []
+                    return
+                
+                # 0/1 Knapsack DP implementation
+                budget = int(team.budget)
+                n = len(cars)
+                
+                # DP table: rows = items, columns = budget
+                dp = [[0] * (budget + 1) for _ in range(n + 1)]
+                
+                # Build DP table
+                for i in range(1, n + 1):
+                    for w in range(1, budget + 1):
+                        if cars[i-1]['price'] <= w:
+                            dp[i][w] = max(
+                                dp[i-1][w],
+                                dp[i-1][w - int(cars[i-1]['price'])] + cars[i-1]['mpg']
+                            )
+                        else:
+                            dp[i][w] = dp[i-1][w]
+                
+                # Backtrack to find selected cars
+                w = budget
+                selected = []
+                
+                for i in range(n, 0, -1):
+                    if dp[i][w] != dp[i-1][w]:
+                        selected.append(cars[i-1])
+                        w -= int(cars[i-1]['price'])
+                
+                team.inventory = selected
+                team.budget -= sum(car['price'] for car in selected)
+                
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Car data file {self.car_data_path} not found")
