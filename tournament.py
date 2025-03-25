@@ -1,138 +1,265 @@
-def buy_cars(self):
-        """Have all teams purchase their initial car inventory"""
-            for team in self.teams:
-                self._purchase_inventory(team)
-    
-        def _purchase_inventory(self, team):
-        """Greedy algorithm to purchase optimal cars within budget (maximizing MPG-H)"""
-            # 1. Load car data
-            try:
-                with open(self.car_data_path, 'r') as f:
-                    # Skip header and parse CSV: Make,Model,MPG-H,Price
-                    cars = [line.strip().split(',') for line in f.readlines()[1:]] 
-            except FileNotFoundError:
-                raise FileNotFoundError(f"Car data file {self.car_data_path} not found")
+import json
+import random
+import csv
+from tabulate import tabulate
+from math import log2
 
-            # 2. Filter cars by team's sponsor and convert to numeric
-            available_cars = []
-            for make, model, mpg, price in cars:
-                if make == team.sponsor:
-                    try:
-                        available_cars.append({
-                            'model': model,
-                            'mpg': float(mpg),
-                            'price': float(price)
-                        })
-                    except ValueError:
-                        continue  # Skip invalid entries
+class Tournament:
+    """
+    A tournament where teams compete based on their fuel-efficient car collections.
+    
+    Attributes:
+        car_data_path (str): Path to car data CSV
+        name (str): Tournament name
+        nteams (int): Number of teams (must be power of 2)
+        teams (list): List of Team objects
+        champion (Team): The winning team
+    """
+    
+    def __init__(self, config_file):
+        """Initialize tournament from config.json"""
+        with open(config_file) as f:
+            config = json.load(f)
+    
+        self.car_data_path = config['car_data_path']
+        self.name = config['tournament_name']
+        self.nteams = config.get('nteams', 16)
+    
+        # Validation (3 marks)
+        if not isinstance(self.nteams, int):
+            raise TypeError("Number of teams must be integer")
+        assert self.nteams > 0, "Team count must be positive"
+        assert (self.nteams & (self.nteams-1)) == 0, "Team count must be power of 2"
+    
+        self.default_low = config.get('default_low', 20000)
+        self.default_high = config.get('default_high', 50000)
+        self.default_incr = config.get('default_incr', 5000)
+        self.teams = []
+        self.champion = None
+    
+    def __repr__(self):
+        """Unambiguous representation for developers"""
+        return (f"Tournament(name='{self.name}', nteams={self.nteams}, "f"car_data='{self.car_data_path}')")
+    
+    def __str__(self):
+        """User-friendly representation"""
+        return f"{self.name} Tournament with {self.nteams} teams"
 
-            # 3. Greedy selection - sort by MPG-H descending
-            available_cars.sort(key=lambda x: x['mpg'], reverse=True)
-
-            # 4. Purchase cars until budget exhausted
-            team.inventory = []
-            remaining_budget = team.budget
+    def generate_sponsors(self, sponsor_list=None, fixed_budget=None, 
+                         low=None, high=None, incr=None):
+        """
+        Assign sponsors and budgets to all teams in the tournament.
     
-            for car in available_cars:
-                if car['price'] <= remaining_budget:
-                    team.inventory.append({
-                        'model': car['model'],
-                        'mpg': car['mpg']
-                    })
-                    remaining_budget -= car['price']
-                    # Optional: uncomment for debugging
-                    # print(f"Purchased {car['model']} (MPG: {car['mpg']}, Price: {car['price']})") 
-
-            # 5. Update team's remaining budget
-            team.budget = remaining_budget Is the greedy algorithm here a good idea? Is it simple enough to understand and implement?
+        Args:
+            sponsor_list: Optional list of specific sponsors (length <= nteams)
+            fixed_budget: Optional fixed budget for all teams (within low/high bounds)
+            low: Minimum budget value (defaults to config value)
+            high: Maximum budget value (defaults to config value)
+            incr: Budget increment step (defaults to config value)
+        """
+        # Available car manufacturers
+        makers = ["Toyota", "Honda", "Ford", "Tesla", "Nissan", 
+                  "BMW", "Mercedes", "Hyundai", "Kia", "Volkswagen"]
     
-
-        def hold_event(self):
-            """Run the tournament competition process"""
-            if not self.teams:
-                raise ValueError("No teams available for tournament")
-    
-            # Make a copy of active teams for the tournament
-            active_teams = [team for team in self.teams if team.active]
-    
-            # Ensure number of teams is power of 2 (should already be validated in __init__)
-            if len(active_teams) == 0:
-                raise ValueError("No active teams to compete")
-    
-            # Tournament loop until only one champion remains
-            while len(active_teams) > 1:
-                next_round = []
+        # Handle sponsor list
+        if sponsor_list:
+            if len(sponsor_list) > self.nteams:
+                raise ValueError("Sponsor list cannot exceed number of teams")
         
-            # Process matches in pairs
+            # Use specified sponsors first, then fill remaining with random makers
+            sponsors = sponsor_list.copy()
+            remaining = self.nteams - len(sponsors)
+            sponsors.extend(random.choices(makers, k=remaining))
+        else:
+            # Random selection with no duplicates if possible
+            sponsors = random.sample(makers, min(len(makers), self.nteams))
+            # If more teams than makers, allow duplicates
+            if len(sponsors) < self.nteams:
+                sponsors.extend(random.choices(makers, k=self.nteams - len(sponsors)))
+    
+        # Handle budget parameters
+        low = low if low is not None else self.default_low
+        high = high if high is not None else self.default_high
+        incr = incr if incr is not None else self.default_incr
+    
+        # Generate budgets
+        if fixed_budget is not None:
+            if not (low <= fixed_budget <= high):
+                raise ValueError(f"Fixed budget must be between {low} and {high}")
+            budgets = [fixed_budget] * self.nteams
+        else:
+            # Create range of possible budgets and select randomly
+            possible_budgets = list(range(low, high + 1, incr))
+            budgets = random.choices(possible_budgets, k=self.nteams)
+    
+        # Store results as instance attributes
+        self.team_sponsors = sponsors
+        self.team_budgets = budgets
+    
+    def generate_teams(self):
+        """Simple version without zip"""
+        self.teams = []  # Start with empty list
+    
+        # Loop through both lists by index
+        for i in range(len(self.team_sponsors)):
+            sponsor = self.team_sponsors[i]
+            budget = self.team_budgets[i]
+            self.teams.append(self.Team(sponsor, budget))
+
+    def buy_cars(self):
+        """Have all teams purchase their initial car inventory"""
+        for team in self.teams:
+            self._purchase_inventory(team)
+
+    def _purchase_inventory(self, team):
+        """Purchase inventory for a single team based on their sponsor"""
+        try:
+            with open(self.car_data_path, 'r') as file:
+                reader = csv.reader(file)
+                next(reader)  # Skip header row
+                available_cars = []
+                for row in reader:
+                    make = row[0]  # First column is Make
+                    model = row[1]  # Second column is Model
+                    mpg = float(row[8])  # MPG-H is 9th column (index 8)
+                    price = float(row[11])  # Price is 12th column (index 11)
+                
+                    if make == team.sponsor:
+                        available_cars.append({
+                            'make': make,
+                            'model': model,
+                            'mpg': mpg,
+                            'price': price
+                        })
+                    
+            # Sort by MPG descending
+            available_cars.sort(key=lambda x: x['mpg'], reverse=True)
+        
+            # Purchase top 5 cars within budget
+            total_spent = 0
+            purchased_cars = []
+        
+            for car in available_cars:
+                if total_spent + car['price'] <= team.budget and len(purchased_cars) < 5:
+                    purchased_cars.append(car)
+                    total_spent += car['price']
+                
+            team.cars = purchased_cars
+            team.budget -= total_spent
+        
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Car data file {self.car_data_path} not found")
+
+    def hold_event(self):
+        """Run the tournament competition"""
+        if not self.teams:
+            raise ValueError("No teams available for tournament")
+    
+        active_teams = [team for team in self.teams if team.active]
+    
+        while len(active_teams) > 1:
+            next_round = []
+        
             for i in range(0, len(active_teams), 2):
                 if i+1 >= len(active_teams):
-                    # Handle odd number of teams (shouldn't happen with power of 2)
                     next_round.append(active_teams[i])
                     continue
             
                 team1 = active_teams[i]
                 team2 = active_teams[i+1]
             
-                # Run the match
                 winner = self._run_match(team1, team2)
                 loser = team2 if winner == team1 else team1
             
-                # Update records
                 winner.wins += 1
                 loser.losses += 1
                 loser.active = False
-            
-                # Award prize money
                 winner.budget += 50000
-            
-                # Allow winner to purchase more inventory
                 self._purchase_inventory(winner)
-            
-                # Advance winner to next round
                 next_round.append(winner)
         
             active_teams = next_round
     
-        # Set the champion
         if active_teams:
             self.champion = active_teams[0]
-            self.champion.active = True  # Ensure champion is marked active
+            self.champion.active = True
     
         return self.champion
 
-        def _run_match(self, team1, team2):
-            """Determine winner of a head-to-head match between two teams"""
-            if not team1.inventory or not team2.inventory:
-            # Edge case: if a team has no cars, they automatically lose
-                return team2 if not team1.inventory else team1
+    def _run_match(self, team1, team2):
+        """Determine match winner"""
+        if not team1.inventory:
+            return team2
+        if not team2.inventory:
+            return team1
     
-            # Calculate team scores based on their car inventories
-            score1 = sum(car['mpg'] for car in team1.inventory)
-            score2 = sum(car['mpg'] for car in team2.inventory)
+        score1 = sum(car['mpg'] for car in team1.inventory)
+        score2 = sum(car['mpg'] for car in team2.inventory)
     
-            # Store scores for tracking
-            team1.scores.append(score1)
-            team2.scores.append(score2)
+        team1.scores.append(score1)
+        team2.scores.append(score2)
     
-            # Determine winner (higher total MPG wins)
-            if score1 > score2:
-                return team1
-            elif score2 > score1:
-                return team2
-            else:
-            # Tiebreaker: random choice
-                return random.choice([team1, team2])
-
-
+        if score1 > score2:
+            return team1
+        elif score2 > score1:
+            return team2
+        else:
+            return random.choice([team1, team2])
 
     def show_win_record(self):
-        """Display win/loss records for all teams"""
+        """Display win/loss records for all teams in the specified format"""
         records = {}
         for team in sorted(self.teams, key=lambda x: x.sponsor):
             records[team.sponsor] = ['W     ' if w else 'L     ' 
                                    for w in ([True]*team.wins + [False]*team.losses)]
-        
-        print(tabulate([[k] + v for k, v in records.items()], 
-                      headers=['Team', *range(1, max(len(v) for v in records.values())+1)],
-                      tablefmt='grid'))
-        
+    
+        # Calculate the maximum sponsor name length for alignment
+        max_name_length = max(len(sponsor) for sponsor in records.keys())
+    
+        # Print each team's record in the desired format
+        for sponsor, results in records.items():
+            # Right-align the sponsor name and left-align the results
+            print(f"{sponsor:>{max_name_length}}: {results}")
+
+    def __ge__(self, x):   
+        """Compare tournaments based on champions' performance (wins then losses)."""
+        if not isinstance(x, Tournament):
+            return NotImplemented
+        # First compare wins, then losses if tied
+        if self.champion.wins != x.champion.wins:
+            return self.champion.wins > x.champion.wins
+        return self.champion.losses < x.champion.losses
+
+
+    class Team:
+        """Inner class representing a competing team"""
+        def __init__(self, sponsor, budget):
+            self._sponsor = sponsor
+            self._initial_budget = budget
+            self.budget = budget
+            self.inventory = []
+            self.active = True
+            self.wins = 0
+            self.losses = 0
+            self.scores = []
+            self.cars_used = 0
+
+        @property
+        def sponsor(self):
+            return self._sponsor
+
+        @property
+        def initial_budget(self):
+            return self._initial_budget
+
+        def __str__(self):
+            status = "ACTIVE" if self.active else "ELIMINATED"
+            return (f"{self.sponsor} Team: ${self.budget}, "
+                    f"{len(self.inventory)} cars, "
+                    f"Record: {self.wins}-{self.losses}, "
+                    f"Status: {status}")
+
+        def __repr__(self):
+            return (f"Team(sponsor='{self.sponsor}', "
+                    f"budget={self.budget}, "
+                    f"active={self.active})")
