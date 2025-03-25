@@ -122,4 +122,17 @@ def buy_cars(self):
             else:
             # Tiebreaker: random choice
                 return random.choice([team1, team2])
+
+
+
+    def show_win_record(self):
+        """Display win/loss records for all teams"""
+        records = {}
+        for team in sorted(self.teams, key=lambda x: x.sponsor):
+            records[team.sponsor] = ['W     ' if w else 'L     ' 
+                                   for w in ([True]*team.wins + [False]*team.losses)]
+        
+        print(tabulate([[k] + v for k, v in records.items()], 
+                      headers=['Team', *range(1, max(len(v) for v in records.values())+1)],
+                      tablefmt='grid'))
         
